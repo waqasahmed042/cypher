@@ -1,0 +1,95 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "Registered user profile containing the public RSA public key for End-to-End Encryption (E2EE) key exchange.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase authentication user ID" },
+        "displayName": { "type": "string", "description": "User's screen name" },
+        "email": { "type": "string", "description": "User's email address" },
+        "photoURL": { "type": "string", "description": "User profile photo URL" },
+        "publicKey": { "type": "string", "description": "Base64-encoded RSA public key in SPKI format" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Registration timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Profile update timestamp" }
+      },
+      "required": ["uid", "displayName", "email", "publicKey", "createdAt"]
+    },
+    "room": {
+      "title": "Room",
+      "description": "A direct message or group chat room.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string", "description": "Unique identifier for the room" },
+        "name": { "type": "string", "description": "Group name or label, or auto-generated for direct chats" },
+        "type": { "type": "string", "enum": ["direct", "group"], "description": "Type of chat room" },
+        "createdBy": { "type": "string", "description": "User ID of the room creator" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Room creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["roomId", "name", "type", "createdBy", "createdAt"]
+    },
+    "roomMember": {
+      "title": "Room Member",
+      "description": "A member of a specific room, containing their individual, RSA-encrypted copy of the room's symmetric AES key.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique user ID of the member" },
+        "displayName": { "type": "string", "description": "Member's display name" },
+        "email": { "type": "string", "description": "Member's email" },
+        "photoURL": { "type": "string", "description": "Member's avatar" },
+        "encryptedRoomKey": { "type": "string", "description": "The room's symmetric 256-bit AES-GCM key encrypted with the member's public RSA key (Base64)" },
+        "joinedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the member joined the room" }
+      },
+      "required": ["userId", "displayName", "encryptedRoomKey", "joinedAt"]
+    },
+    "message": {
+      "title": "Message",
+      "description": "An end-to-end encrypted message payload containing Base64 encrypted text and its corresponding IV.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "description": "Unique identifier for the message" },
+        "senderId": { "type": "string", "description": "Sender user ID" },
+        "senderName": { "type": "string", "description": "Sender display name" },
+        "senderPhotoURL": { "type": "string", "description": "Sender profile photo" },
+        "encryptedText": { "type": "string", "description": "AES-256-GCM encrypted message body, Base64-encoded" },
+        "iv": { "type": "string", "description": "Base64-encoded AES initial vector (96-bit for GCM)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Message creation timestamp" }
+      },
+      "required": ["messageId", "senderId", "senderName", "encryptedText", "iv", "createdAt"]
+    },
+    "presence": {
+      "title": "Presence Status",
+      "description": "Typing and presence states for users inside a room.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "User ID" },
+        "isTyping": { "type": "boolean", "description": "Whether the user is currently typing" },
+        "lastActive": { "type": "string", "format": "date-time", "description": "Timestamp of last interaction" }
+      },
+      "required": ["userId", "isTyping", "lastActive"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Global collection mapping user IDs to their profile credentials and E2EE public keys."
+    },
+    "/rooms/{roomId}": {
+      "schema": "room",
+      "description": "Chat rooms container collection."
+    },
+    "/rooms/{roomId}/members/{userId}": {
+      "schema": "roomMember",
+      "description": "Sub-collection of user memberships in a chat room, defining key distribution mappings securely."
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "message",
+      "description": "E2EE encrypted messages in a chat room, completely shielded from third-party server reading."
+    },
+    "/rooms/{roomId}/presence/{userId}": {
+      "schema": "presence",
+      "description": "Real-time presence and typing status map."
+    }
+  }
+}
