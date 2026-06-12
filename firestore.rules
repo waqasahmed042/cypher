@@ -1,0 +1,186 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net - Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Reusable Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isMemberOfRoom(roomId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- 2. Users Collection Rules ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+
+      function isValidUser(data) {
+        return data.uid is string && data.uid.size() > 0 && data.uid.size() <= 64
+          && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100
+          && data.email is string && data.email.size() > 3 && data.email.size() <= 100
+          && data.publicKey is string && data.publicKey.size() > 0 && data.publicKey.size() <= 2000;
+      }
+
+      allow create: if isOwner(userId) 
+                    && isValidId(userId)
+                    && isValidUser(incoming())
+                    && incoming().uid == userId
+                    && incoming().createdAt == request.time;
+
+      allow update: if isOwner(userId) 
+                    && isValidId(userId)
+                    && isValidUser(incoming())
+                    && incoming().uid == userId
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time;
+
+      // Direct Room Indexing: allows rapid listings of user rooms
+      match /joinedRooms/{roomIdInbox} {
+        allow read: if isOwner(userId);
+        allow write: if isSignedIn() && isValidId(roomIdInbox);
+      }
+    }
+
+    // --- 3. Rooms Collection Rules ---
+    match /rooms/{roomId} {
+      allow get: if isSignedIn() && isValidId(roomId) && isMemberOfRoom(roomId);
+      allow list: if isSignedIn() && isValidId(roomId) && isMemberOfRoom(roomId);
+
+      function isValidRoom(data) {
+        return data.roomId is string && data.roomId.size() > 0 && data.roomId.size() <= 64
+          && data.name is string && data.name.size() <= 100
+          && data.type is string && (data.type == 'direct' || data.type == 'group')
+          && data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 64;
+      }
+
+      allow create: if isSignedIn() 
+                    && isValidId(roomId)
+                    && isValidRoom(incoming())
+                    && incoming().roomId == roomId
+                    && incoming().createdBy == request.auth.uid
+                    && incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() 
+                    && isValidId(roomId)
+                    && isMemberOfRoom(roomId)
+                    && isValidRoom(incoming())
+                    && incoming().roomId == existing().roomId
+                    && incoming().createdBy == existing().createdBy
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time;
+      
+      // --- 4. Room Members Subcollection Rules ---
+      match /members/{memberId} {
+        // Users can read membership lists if they are already in the room OR if they are querying their own enrollment document.
+        allow read: if isSignedIn() 
+                     && isValidId(roomId)
+                     && isValidId(memberId)
+                     && (memberId == request.auth.uid || isMemberOfRoom(roomId));
+
+        function isValidRoomMember(data) {
+          return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 64
+            && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100
+            && data.encryptedRoomKey is string && data.encryptedRoomKey.size() > 0 && data.encryptedRoomKey.size() <= 2000;
+        }
+
+        // Room creator can add any member initially; existing members can add new members.
+        allow create: if isSignedIn() 
+                      && isValidId(roomId)
+                      && isValidId(memberId)
+                      && isValidRoomMember(incoming())
+                      && incoming().userId == memberId
+                      && incoming().joinedAt == request.time
+                      && (
+                        // If it is the first member (owner), they enroll themselves
+                        request.auth.uid == memberId
+                        // Or parent room creator is adding them
+                        || get(/databases/$(database)/documents/rooms/$(roomId)).data.createdBy == request.auth.uid
+                        // Or existing member invites a new member
+                        || isMemberOfRoom(roomId)
+                      );
+
+        allow update: if isSignedIn() 
+                      && isValidId(roomId)
+                      && isValidId(memberId)
+                      && isOwner(memberId)
+                      && isValidRoomMember(incoming())
+                      && incoming().userId == existing().userId
+                      && incoming().joinedAt == existing().joinedAt
+                      && incoming().encryptedRoomKey == existing().encryptedRoomKey; // encrypted keys are final/immutable after join
+
+        allow delete: if isSignedIn() 
+                      && isValidId(roomId)
+                      && isValidId(memberId)
+                      && (
+                        isOwner(memberId) // can leave room
+                        || get(/databases/$(database)/documents/rooms/$(roomId)).data.createdBy == request.auth.uid // owner can kick
+                      );
+      }
+
+      // --- 5. Message Subcollection Rules ---
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && isValidId(roomId) && isMemberOfRoom(roomId);
+
+        function isValidMessage(data) {
+          return data.messageId is string && data.messageId.size() > 0 && data.messageId.size() <= 64
+            && data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 64
+            && data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 100
+            && data.senderPhotoURL is string && data.senderPhotoURL.size() <= 500
+            && data.encryptedText is string && data.encryptedText.size() > 0 && data.encryptedText.size() <= 50000
+            && data.iv is string && data.iv.size() > 0 && data.iv.size() <= 128;
+        }
+
+        // Messages are immutable: allow create, deny update/delete.
+        allow create: if isSignedIn() 
+                      && isValidId(roomId)
+                      && isValidId(messageId)
+                      && isMemberOfRoom(roomId)
+                      && isValidMessage(incoming())
+                      && incoming().messageId == messageId
+                      && incoming().senderId == request.auth.uid
+                      && incoming().createdAt == request.time;
+      }
+
+      // --- 6. Presence Status Collection Rules ---
+      match /presence/{userId} {
+        allow get, list: if isSignedIn() && isValidId(roomId) && isMemberOfRoom(roomId);
+
+        function isValidPresence(data) {
+          return data.userId is string && data.userId.size() > 0 && data.userId.size() <= 64
+            && data.isTyping is bool;
+        }
+
+        // Users can set, update, or remove their own presence.
+        allow create, update, delete: if isSignedIn() 
+                                      && isValidId(roomId)
+                                      && isValidId(userId)
+                                      && isOwner(userId)
+                                      && isValidPresence(incoming())
+                                      && incoming().userId == userId;
+      }
+    }
+  }
+}
