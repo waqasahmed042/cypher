@@ -1,0 +1,6 @@
+{
+  "name": "Real-Time Encrypted Chat",
+  "description": "A real-time chat application featuring client-side end-to-end encryption, group messaging, and real-time push/alert notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
